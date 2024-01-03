@@ -5,6 +5,8 @@ import logging
 import os
 import platform
 import ssl
+import websockets
+import stomper
 
 # from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription
@@ -36,6 +38,26 @@ def create_local_tracks():
         relay = MediaRelay()
     return None, relay.subscribe(webcam.video)
 
+async def connect():
+    # 시그널링 서버 websocket 연결 & stomp 방식으로 채널 구독(test)
+    ws_url = f"ws://{args.host}:{args.port}/signaling"
+    ws_url_test = "ws://localhost:8080/signaling/websocket"
+    async with websockets.connect(ws_url_test) as websocket:
+        await websocket.send("CONNECT\naccept-version:1.0,1.1,2.0\n\n\x00\n")
+
+        sub_offer = stomper.subscribe("/queue/offer/1234", idx="1234")
+        await websocket.send(sub_offer)
+
+        sub_ice = stomper.subscribe("/queue/iceCandidate/1234", idx="1234")
+        await websocket.send(sub_ice)
+
+        send = stomper.send("/app/initiate", "1234")
+        await websocket.send(send)
+
+        while True:
+            print("try")
+            message = await websocket.recv()
+            print(f"Received message" + message)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="WebRTC webcam")
@@ -48,3 +70,4 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    asyncio.get_event_loop().run_until_complete(connect())
