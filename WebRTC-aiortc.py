@@ -5,11 +5,13 @@ import logging
 import os
 import platform
 import ssl
+
+import aiortc.sdp
 import websockets
 import stomper
 
 # from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc.rtcrtpsender import RTCRtpSender
 
@@ -32,7 +34,7 @@ def create_local_tracks():
             )
         elif platform.system() == "Windows":
             webcam = MediaPlayer(
-                "video=LG Camera", format="dshow"
+                "video=LG Camera", format="dshow", options=options
             )
         else:
             webcam = MediaPlayer("/dev/video0", format="v4l2", options=options)
@@ -45,15 +47,17 @@ def create_peer(userKey):
 
     # add track
     # TODO:audio 전달 추가, codec?
-    # audio, video = create_local_tracks()
 
-    #peer.addTrack(video)
+
+
+    audio, video = create_local_tracks()
+
+    peer.addTrack(video)
 
     # TODO:iceconnectionchange
 
-    # TODO:onicecandidate
-
     return peer
+
 
 async def handle_offer(message_body):
     global conn
@@ -74,10 +78,31 @@ async def handle_offer(message_body):
     # answer 전송
     # TODO:함수로 빼기?
     answer = await local_peer.createAnswer()
+    print("set local description started")
     await local_peer.setLocalDescription(answer)
+    print("set local description ended")
 
-    answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": "1234", "description": {"sdp":answer.sdp, "type": answer.type}}))
+    answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": "1234", "description": {"sdp": local_peer.localDescription.sdp, "type": local_peer.localDescription.type}}))
+    # answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": "1234", "description": {"sdp": answer.sdp, "type": answer.type}}))
     await conn.send(answer_meg)
+
+
+async def handle_iceCandidate(message_body):
+    global conn
+    message_body = json.loads(message_body)
+    user_key = message_body["userKey"]
+    description = message_body["description"]
+    candidate = description["candidate"]
+    candidate = candidate.replace("candidate:", "")
+
+    candidate = aiortc.sdp.candidate_from_sdp(candidate)
+    candidate.sdpMid = description["sdpMid"]
+    candidate.sdpMLineIndex = description["sdpMLineIndex"]
+
+    local_peer = peer_map.get(user_key)
+    await local_peer.addIceCandidate(candidate)
+
+
 
 
 async def process_message(message):
@@ -86,9 +111,12 @@ async def process_message(message):
     destination = f.headers.get("destination")
     if destination:
         if "offer" in destination:
+            print("offer")
             await handle_offer(f.body)
         elif "iceCandidate" in destination:
-            print("iceCandidate message")
+            print("offer")
+            await handle_iceCandidate(f.body)
+
 
 
 async def connect():
