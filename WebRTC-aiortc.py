@@ -6,35 +6,12 @@ import argparse
 import platform
 import aiortc.sdp
 import websockets
-from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc import VideoStreamTrack
 from av import VideoFrame
 
-
-relay = None
-webcam = None
 conn = None
 peer_map = {}
-
-def create_local_tracks():
-    global relay, webcam
-
-    # TODO: 웹캠 경로 변경, 또는 openCV를 사용하도록, 웹캠 영상 처리 방법
-    options = {"framerate": "30", "video_size": "640x480"}
-    if relay is None:
-        if platform.system() == "Darwin":
-            webcam = MediaPlayer(
-                "default:none", format="avfoundation", options=options
-            )
-        elif platform.system() == "Windows":
-            webcam = MediaPlayer(
-                "video=LG Camera", format="dshow", options=options
-            )
-        else:
-            webcam = MediaPlayer("/dev/video0", format="v4l2", options=options)
-        relay = MediaRelay()
-    return None, relay.subscribe(webcam.video)
 
 
 class WebcamStreamTrack(VideoStreamTrack):
@@ -48,20 +25,28 @@ class WebcamStreamTrack(VideoStreamTrack):
     async def recv(self):
         pts, time_base = await self.next_timestamp()
         res, img = self.track.read()
-        print(img, time_base, res)
         frame = VideoFrame.from_ndarray(img, format="bgr24")
         frame.pts = pts
         frame.time_base = time_base
         return frame
 
 
-def create_peer():
+def create_peer(user_key):
     peer = RTCPeerConnection()
 
     # audio, video = create_local_tracks()
     peer.addTrack(WebcamStreamTrack())
 
-    # TODO:iceconnectionchange
+    @peer.on("iceconnectionstatechange")
+    async def on_iceconnectionstatechange():
+        ice_connection_state = peer.iceConnectionState
+        if ice_connection_state == "completed":
+            conn_meg = stomper.send("/app/connected", user_key)
+            await conn.send(conn_meg)
+        if ice_connection_state == "failed":
+            disconn_msg = stomper.send("/app/disconnected", user_key)
+            await conn.send(disconn_msg)
+            peer_map.pop(user_key)
 
     return peer
 
@@ -77,7 +62,7 @@ async def handle_offer(message_body):
 
     # RTCPeerConnection 생성
     #TODO:여러 사람이 들어오는 경우 처리(멀티스레드?) - 우선은 한 사람과의 p2p 연결 및 트랙 전송 목표로
-    local_peer = create_peer()
+    local_peer = create_peer(user_key)
 
     peer_map[user_key] = local_peer
     await local_peer.setRemoteDescription(offer)
