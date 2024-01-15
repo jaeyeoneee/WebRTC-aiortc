@@ -1,21 +1,16 @@
-import argparse
-import asyncio
 import json
-import logging
-import os
+import cv2
+import asyncio
+import stomper
+import argparse
 import platform
-import ssl
-
 import aiortc.sdp
 import websockets
-import stomper
-
-# from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.contrib.media import MediaPlayer, MediaRelay
-from aiortc.rtcrtpsender import RTCRtpSender
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import VideoStreamTrack
+from av import VideoFrame
 
-ROOT = os.path.dirname(__file__)
 
 relay = None
 webcam = None
@@ -42,17 +37,29 @@ def create_local_tracks():
     return None, relay.subscribe(webcam.video)
 
 
-def create_peer(userKey):
+class WebcamStreamTrack(VideoStreamTrack):
+
+    kind = "video"
+
+    def __init__(self):
+        super().__init__()
+        self.track = cv2.VideoCapture(0)
+
+    async def recv(self):
+        pts, time_base = await self.next_timestamp()
+        res, img = self.track.read()
+        print(img, time_base, res)
+        frame = VideoFrame.from_ndarray(img, format="bgr24")
+        frame.pts = pts
+        frame.time_base = time_base
+        return frame
+
+
+def create_peer():
     peer = RTCPeerConnection()
 
-    # add track
-    # TODO:audio 전달 추가, codec?
-
-
-
-    audio, video = create_local_tracks()
-
-    peer.addTrack(video)
+    # audio, video = create_local_tracks()
+    peer.addTrack(WebcamStreamTrack())
 
     # TODO:iceconnectionchange
 
@@ -70,20 +77,16 @@ async def handle_offer(message_body):
 
     # RTCPeerConnection 생성
     #TODO:여러 사람이 들어오는 경우 처리(멀티스레드?) - 우선은 한 사람과의 p2p 연결 및 트랙 전송 목표로
-    local_peer = create_peer(user_key)
+    local_peer = create_peer()
 
     peer_map[user_key] = local_peer
     await local_peer.setRemoteDescription(offer)
 
     # answer 전송
-    # TODO:함수로 빼기?
     answer = await local_peer.createAnswer()
-    print("set local description started")
     await local_peer.setLocalDescription(answer)
-    print("set local description ended")
 
     answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": "1234", "description": {"sdp": local_peer.localDescription.sdp, "type": local_peer.localDescription.type}}))
-    # answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": "1234", "description": {"sdp": answer.sdp, "type": answer.type}}))
     await conn.send(answer_meg)
 
 
@@ -103,18 +106,14 @@ async def handle_iceCandidate(message_body):
     await local_peer.addIceCandidate(candidate)
 
 
-
-
 async def process_message(message):
     f = stomper.Frame()
     f.unpack(message)
     destination = f.headers.get("destination")
     if destination:
         if "offer" in destination:
-            print("offer")
             await handle_offer(f.body)
         elif "iceCandidate" in destination:
-            print("offer")
             await handle_iceCandidate(f.body)
 
 
