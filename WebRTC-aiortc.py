@@ -3,21 +3,17 @@ import cv2
 import asyncio
 import stomper
 import argparse
-import platform
 import aiortc.sdp
 import websockets
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc import VideoStreamTrack
+from aiortc.mediastreams import VideoStreamTrack
 from av import VideoFrame
 
 conn = None
 peer_map = {}
 
 
-class WebcamStreamTrack(VideoStreamTrack):
-
-    kind = "video"
-
+class WebcamVideoStreamTrack(VideoStreamTrack):
     def __init__(self):
         super().__init__()
         self.track = cv2.VideoCapture(0)
@@ -34,8 +30,7 @@ class WebcamStreamTrack(VideoStreamTrack):
 def create_peer(user_key):
     peer = RTCPeerConnection()
 
-    # audio, video = create_local_tracks()
-    peer.addTrack(WebcamStreamTrack())
+    peer.addTrack(WebcamVideoStreamTrack())
 
     @peer.on("iceconnectionstatechange")
     async def on_iceconnectionstatechange():
@@ -47,6 +42,13 @@ def create_peer(user_key):
             disconn_msg = stomper.send("/app/disconnected", user_key)
             await conn.send(disconn_msg)
             peer_map.pop(user_key)
+
+
+    @peer.on("datachannel")
+    async def on_datachannel(channel):
+        @channel.on("message")
+        def on_message(message):
+            print(message)
 
     return peer
 
@@ -61,7 +63,7 @@ async def handle_offer(message_body):
     offer = RTCSessionDescription(sdp=description["sdp"], type=description["type"])
 
     # RTCPeerConnection 생성
-    #TODO:여러 사람이 들어오는 경우 처리(멀티스레드?) - 우선은 한 사람과의 p2p 연결 및 트랙 전송 목표로
+    # TODO:여러 사람이 들어오는 경우 처리(멀티스레드?) - 우선은 한 사람과의 p2p 연결 및 트랙 전송 목표로
     local_peer = create_peer(user_key)
 
     peer_map[user_key] = local_peer
@@ -71,7 +73,8 @@ async def handle_offer(message_body):
     answer = await local_peer.createAnswer()
     await local_peer.setLocalDescription(answer)
 
-    answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": "1234", "description": {"sdp": local_peer.localDescription.sdp, "type": local_peer.localDescription.type}}))
+    answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": "1234", "description": {
+        "sdp": local_peer.localDescription.sdp, "type": local_peer.localDescription.type}}))
     await conn.send(answer_meg)
 
 
@@ -102,14 +105,13 @@ async def process_message(message):
             await handle_iceCandidate(f.body)
 
 
-
 async def connect():
     global conn
     # 시그널링 서버 websocket 연결 & stomp 방식으로 채널 구독(test)
     ws_url = f"ws://{args.host}:{args.port}/signaling"
     ws_url_test = "ws://localhost:8080/signaling/websocket"
     async with websockets.connect(ws_url_test) as websocket:
-        #TODO: conn 수정
+        # TODO: conn 수정
         conn = websocket
 
         await websocket.send("CONNECT\naccept-version:1.0,1.1,2.0\n\n\x00\n")
