@@ -49,6 +49,7 @@ def create_peer(user_key):
         @channel.on("message")
         def on_message(message):
             print(message)
+            channel.send(message)
 
     return peer
 
