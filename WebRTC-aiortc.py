@@ -11,16 +11,17 @@ from av import VideoFrame
 
 conn = None
 peer_map = {}
-
+track = cv2.VideoCapture(0)
 
 class WebcamVideoStreamTrack(VideoStreamTrack):
+
+    
     def __init__(self):
         super().__init__()
-        self.track = cv2.VideoCapture(0)
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
-        res, img = self.track.read()
+        res, img = track.read()
         frame = VideoFrame.from_ndarray(img, format="bgr24")
         frame.pts = pts
         frame.time_base = time_base
