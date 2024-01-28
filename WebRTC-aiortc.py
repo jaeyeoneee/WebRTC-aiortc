@@ -1,10 +1,12 @@
-import json
 import cv2
+import os
+import json
 import asyncio
 import stomper
 import argparse
 import aiortc.sdp
 import websockets
+from abc import *
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import VideoStreamTrack
 from av import VideoFrame
@@ -13,9 +15,33 @@ conn = None
 peer_map = {}
 track = cv2.VideoCapture(0)
 
-class WebcamVideoStreamTrack(VideoStreamTrack):
 
+class CommandHandler(metaclass = ABCMeta):
+    def __init__(self) -> None:
+        self.command = ""
     
+    async def identify(self, message):
+        return self.command == message
+
+    @abstractmethod
+    async def handle_command(self) -> str:
+        pass
+
+
+class quitCommandHandler(CommandHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.command = "quit"
+
+    async def handle_command(self) -> str:
+        try:
+            os._exit(1)
+        except:
+            return "프로그램 종료 실패"
+
+command_handler = [quitCommandHandler()]
+
+class WebcamVideoStreamTrack(VideoStreamTrack):
     def __init__(self):
         super().__init__()
 
@@ -48,10 +74,11 @@ def create_peer(user_key):
     @peer.on("datachannel")
     async def on_datachannel(channel):
         @channel.on("message")
-        def on_message(message):
-            print(message)
-            channel.send(message)
-
+        async def on_message(rev_message):
+            for handler in command_handler:
+                if await handler.identify(message=rev_message):
+                    send_messgae = await handler.handle_command()
+                    channel.send(send_messgae)
     return peer
 
 
@@ -65,7 +92,6 @@ async def handle_offer(message_body):
     offer = RTCSessionDescription(sdp=description["sdp"], type=description["type"])
 
     # RTCPeerConnection 생성
-    # TODO:여러 사람이 들어오는 경우 처리(멀티스레드?) - 우선은 한 사람과의 p2p 연결 및 트랙 전송 목표로
     local_peer = create_peer(user_key)
 
     peer_map[user_key] = local_peer
@@ -109,7 +135,7 @@ async def process_message(message):
 
 async def connect():
     global conn
-    # 시그널링 서버 websocket 연결 & stomp 방식으로 채널 구독(test)
+    # 시그널링 서버 websocket 연결 & stomp 방식으로 채널 구독
     ws_url = f"ws://{args.host}:{args.port}/signaling"
     ws_url_test = "ws://localhost:8080/signaling/websocket"
     async with websockets.connect(ws_url_test) as websocket:
