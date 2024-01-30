@@ -1,6 +1,8 @@
 import cv2
 import os
 import json
+import random
+import string
 import asyncio
 import stomper
 import argparse
@@ -11,6 +13,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import VideoStreamTrack
 from av import VideoFrame
 
+cam_key = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
 conn = None
 peer_map = {}
 track = cv2.VideoCapture(0)
@@ -39,7 +42,19 @@ class quitCommandHandler(CommandHandler):
         except:
             return "프로그램 종료 실패"
 
-command_handler = [quitCommandHandler()]
+
+        
+class audioCommandHandler(CommandHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.command = "audio"
+        self.audio_transmitting = False
+
+    async def handle_command(self) -> str:
+        pass
+
+
+command_handler = [quitCommandHandler(), audioCommandHandler()]
 
 class WebcamVideoStreamTrack(VideoStreamTrack):
     def __init__(self):
@@ -83,7 +98,6 @@ def create_peer(user_key):
 
 
 async def handle_offer(message_body):
-    global conn
     message_body = json.loads(message_body)
     description = message_body["description"]
     user_key = message_body["userKey"]
@@ -101,13 +115,12 @@ async def handle_offer(message_body):
     answer = await local_peer.createAnswer()
     await local_peer.setLocalDescription(answer)
 
-    answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": "1234", "description": {
+    answer_meg = stomper.send("/app/answer/" + user_key, json.dumps({"camKey": cam_key, "description": {
         "sdp": local_peer.localDescription.sdp, "type": local_peer.localDescription.type}}))
     await conn.send(answer_meg)
 
 
 async def handle_iceCandidate(message_body):
-    global conn
     message_body = json.loads(message_body)
     user_key = message_body["userKey"]
     description = message_body["description"]
@@ -136,21 +149,19 @@ async def process_message(message):
 async def connect():
     global conn
     # 시그널링 서버 websocket 연결 & stomp 방식으로 채널 구독
-    ws_url = f"ws://{args.host}:{args.port}/signaling"
-    ws_url_test = "ws://localhost:8080/signaling/websocket"
-    async with websockets.connect(ws_url_test) as websocket:
-        # TODO: conn 수정
+    ws_url = f"ws://{args.host}:{args.port}/signaling/websocket"
+    async with websockets.connect(ws_url) as websocket:
         conn = websocket
 
         await websocket.send("CONNECT\naccept-version:1.0,1.1,2.0\n\n\x00\n")
 
-        sub_offer = stomper.subscribe("/queue/offer/1234", idx="1234")
+        sub_offer = stomper.subscribe("/queue/offer/" + cam_key, idx=cam_key)
         await websocket.send(sub_offer)
 
-        sub_ice = stomper.subscribe("/queue/iceCandidate/1234", idx="1234")
+        sub_ice = stomper.subscribe("/queue/iceCandidate/" + cam_key, idx=cam_key)
         await websocket.send(sub_ice)
 
-        send = stomper.send("/app/initiate", "1234")
+        send = stomper.send("/app/initiate", json.dumps({"camKey": cam_key, "display": args.display}))
         await websocket.send(send)
 
         while True:
@@ -165,6 +176,9 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--port", type=int, default=8080, help="Port for HTTP server (default:8080)"
+    )
+    parser.add_argument(
+        "--display", type=str, default=None, help="client display name"
     )
 
     args = parser.parse_args()
