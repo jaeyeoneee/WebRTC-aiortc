@@ -1,0 +1,5 @@
+aiortc==1.6.0
+av==11.0.0
+opencv_python==4.8.1.78
+stomper==0.4.3
+websockets==12.0
