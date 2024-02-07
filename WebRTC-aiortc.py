@@ -43,18 +43,7 @@ class quitCommandHandler(CommandHandler):
             return "프로그램 종료 실패"
 
 
-        
-class audioCommandHandler(CommandHandler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.command = "audio"
-        self.audio_transmitting = False
-
-    async def handle_command(self) -> str:
-        pass
-
-
-command_handler = [quitCommandHandler(), audioCommandHandler()]
+command_handler = [quitCommandHandler()]
 
 class WebcamVideoStreamTrack(VideoStreamTrack):
     def __init__(self):
@@ -90,10 +79,15 @@ def create_peer(user_key):
     async def on_datachannel(channel):
         @channel.on("message")
         async def on_message(rev_message):
+            flag = True
             for handler in command_handler:
                 if await handler.identify(message=rev_message):
                     send_messgae = await handler.handle_command()
                     channel.send(send_messgae)
+                    flag = False
+            if (flag):
+                channel.send("전송 성공")
+            
     return peer
 
 
@@ -102,16 +96,17 @@ async def handle_offer(message_body):
     description = message_body["description"]
     user_key = message_body["userKey"]
 
-    # offer 생성
+    # 받은 메시지로 offer 객체 생성
     offer = RTCSessionDescription(sdp=description["sdp"], type=description["type"])
 
     # RTCPeerConnection 생성
     local_peer = create_peer(user_key)
-
     peer_map[user_key] = local_peer
+
+    # offer를 RTCPeerConnection에 추가
     await local_peer.setRemoteDescription(offer)
 
-    # answer 전송
+    # answer 전송, answer에 ice candidate까지 모두 전송 (trickle x)
     answer = await local_peer.createAnswer()
     await local_peer.setLocalDescription(answer)
 
@@ -121,6 +116,7 @@ async def handle_offer(message_body):
 
 
 async def handle_iceCandidate(message_body):
+    # 들어온 ice candidate를 RTCPeerConnection에 추가
     message_body = json.loads(message_body)
     user_key = message_body["userKey"]
     description = message_body["description"]
@@ -136,6 +132,7 @@ async def handle_iceCandidate(message_body):
 
 
 async def process_message(message):
+    # 메시지가 offer인지 ice candidate인지 구분
     f = stomper.Frame()
     f.unpack(message)
     destination = f.headers.get("destination")
